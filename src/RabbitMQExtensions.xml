@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Extensions xmlns="http://www.microsoft.com/SqlServer/Dts/Extensions.xsd">
+  <PipelineComponents>
+    <PipelineComponent Identifier="SSISRabbitMQ.RabbitMQSource" Model=".NET">
+      <CreationName>RabbitMQSource.RabbitMQSource, RabbitMQSource, Version=13.0.0.0, Culture=neutral, PublicKeyToken=ac1c316408dd3955</CreationName>
+      <TypeConverter name="DeclareQueue">RabbitMQSource.RabbitMQSource+TrueFalseProperty, RabbitMQSource, Version=13.0.0.0, Culture=neutral, PublicKeyToken=ac1c316408dd395</TypeConverter>
+    </PipelineComponent>
+  </PipelineComponents>
+  <ConnectionManagers>
+    <ConnectionManager Identifier="RABBITMQ" Model=".NET">
+      <CreationName>RabbitMQConnectionManager.RabbitMQConnectionManager, RabbitMQConnectionManager, Version=13.0.0.0, Culture=neutral, PublicKeyToken=ac1c316408dd3955</CreationName>
+    </ConnectionManager>
+  </ConnectionManagers>
+</Extensions>
