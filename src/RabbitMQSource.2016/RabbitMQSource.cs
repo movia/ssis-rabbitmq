@@ -1,11 +1,15 @@
-﻿using Microsoft.SqlServer.Dts.Pipeline;
+﻿using System;
+using System.Text;
+
+using Microsoft.SqlServer.Dts.Pipeline;
 using Microsoft.SqlServer.Dts.Pipeline.Wrapper;
 using Microsoft.SqlServer.Dts.Runtime;
 using Microsoft.SqlServer.Dts.Runtime.Wrapper;
+
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using System;
-using System.Text;
+
+using RabbitMQSource.Enums;
 
 namespace RabbitMQSource
 {
@@ -293,12 +297,6 @@ namespace RabbitMQSource
             DtsPipelineComponentAttribute attribute = (DtsPipelineComponentAttribute)Attribute.GetCustomAttribute(this.GetType(), typeof(DtsPipelineComponentAttribute), false);
             int currentVersion = attribute.CurrentVersion;
             ComponentMetaData.Version = currentVersion;
-        }
-
-        public enum TrueFalseProperty
-        {
-            True,
-            False,
         }
     }
 }

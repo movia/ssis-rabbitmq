@@ -115,7 +115,6 @@
     <EmbeddedResource Include="..\Rabbit.ico" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <Import Project="$(SolutionDir)\.nuget\nuget.targets" />
   <PropertyGroup>
     <PostBuildEvent>copy "$(TargetDir)*.dll" "$(SolutionDir)..\dist\ssis2016\"
 copy "$(SolutionDir)RabbitMQExtensions.xml" "$(SolutionDir)..\dist\ssis2016\"</PostBuildEvent>
