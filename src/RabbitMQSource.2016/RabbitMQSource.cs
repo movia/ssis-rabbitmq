@@ -19,7 +19,7 @@ namespace RabbitMQSource
         ComponentType = ComponentType.SourceAdapter,
         Description = "Connection source for RabbitMQ",
         CurrentVersion = 1,
-        UITypeName = "RabbitMQSource.RabbitMQSourceUI, RabbitMQSource, Version=13.0.0.0, Culture=neutral, PublicKeyToken=ac1c316408dd3955")]
+        UITypeName = "RabbitMQSource.RabbitMQSourceUI, RabbitMQSource, Version=13.0.1.0, Culture=neutral, PublicKeyToken=ac1c316408dd3955")]
     public class RabbitMQSource : PipelineComponent
     {
         private const string defaultBodyColumnName = "Body";
@@ -34,6 +34,8 @@ namespace RabbitMQSource
 
         private string queueName;
         private bool declareQueue;
+        private int timeout;
+        private int batchSize;
         private string consumerTag;
 
         public int[] outputToBufferMap;
@@ -66,6 +68,18 @@ namespace RabbitMQSource
             declareQueue.TypeConverter = typeof(TrueFalseProperty).AssemblyQualifiedName;
             declareQueue.ExpressionType = DTSCustomPropertyExpressionType.CPET_NOTIFY;
             declareQueue.Value = TrueFalseProperty.False;
+
+            IDTSCustomProperty100 timeoutProperty = ComponentMetaData.CustomPropertyCollection.New();
+            timeoutProperty.Name = "Timeout";
+            timeoutProperty.Description = "Max. time in seconds to wait for a message.";
+            timeoutProperty.ExpressionType = DTSCustomPropertyExpressionType.CPET_NOTIFY;
+            timeoutProperty.Value = 1;
+
+            IDTSCustomProperty100 batchSizeProperty = ComponentMetaData.CustomPropertyCollection.New();
+            batchSizeProperty.Name = "BatchSize";
+            batchSizeProperty.Description = "Max. batch size to consume.";
+            batchSizeProperty.ExpressionType = DTSCustomPropertyExpressionType.CPET_NOTIFY;
+            batchSizeProperty.Value = 10000;
 
             IDTSRuntimeConnection100 connection = ComponentMetaData.RuntimeConnectionCollection.New();
             connection.Name = "RabbitMQ";
@@ -173,7 +187,9 @@ namespace RabbitMQSource
                     throw new Exception("Couldn't get the RabbitMQ connection manager, ");
 
                 queueName = (string)ComponentMetaData.CustomPropertyCollection["QueueName"].Value;
-                
+                timeout = (int)ComponentMetaData.CustomPropertyCollection["Timeout"].Value;
+                batchSize = (int)ComponentMetaData.CustomPropertyCollection["BatchSize"].Value;
+
                 rabbitConnection = rabbitMqConnectionManager.AcquireConnection(transaction) as IConnection;
             }
         }
@@ -221,17 +237,18 @@ namespace RabbitMQSource
 
         public override void PrimeOutput(int outputs, int[] outputIDs, PipelineBuffer[] buffers)
         {
+            int numRows = 0;
             IDTSOutput100 output = ComponentMetaData.OutputCollection[0];
             PipelineBuffer buffer = buffers[0];
 
             BasicDeliverEventArgs message;
             bool success;
 
-            while (queueConsumer.IsRunning)
+            while (queueConsumer.IsRunning && numRows < batchSize)
             {
                 try
                 {
-                    success = queueConsumer.Queue.Dequeue(100, out message);
+                    success = queueConsumer.Queue.Dequeue(timeout * 1000, out message);
                 }
                 catch (Exception)
                 {
@@ -240,6 +257,7 @@ namespace RabbitMQSource
 
                 if (success)
                 {
+                    numRows++;
                     buffer.AddRow();
 
                     for (int i = 0; i < output.OutputColumnCollection.Count; i++)

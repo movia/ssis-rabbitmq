@@ -9,7 +9,7 @@ namespace RabbitMQConnectionManager
         ConnectionType = "RABBITMQ",
         DisplayName = "RabbitMQ Connection Manager",
         Description = "Connection Manager for RabbitMQ",
-        UITypeName = "RabbitMQConnectionManager.RabbitMQConnectionManagerUI, RabbitMQConnectionManager, Version=13.0.0.0, Culture=neutral, PublicKeyToken=ac1c316408dd3955")]
+        UITypeName = "RabbitMQConnectionManager.RabbitMQConnectionManagerUI, RabbitMQConnectionManager, Version=13.0.1.0, Culture=neutral, PublicKeyToken=ac1c316408dd3955")]
     public class RabbitMQConnectionManager : ConnectionManagerBase
     {
         public string HostName { get; set; }
