@@ -18,7 +18,7 @@ namespace RabbitMQSource
         DisplayName = "RabbitMQ Source",
         ComponentType = ComponentType.SourceAdapter,
         Description = "Connection source for RabbitMQ",
-        CurrentVersion = 1,
+        CurrentVersion = 2,
         UITypeName = "RabbitMQSource.RabbitMQSourceUI, RabbitMQSource, Version=13.0.1.0, Culture=neutral, PublicKeyToken=ac1c316408dd3955")]
     public class RabbitMQSource : PipelineComponent
     {
@@ -28,7 +28,6 @@ namespace RabbitMQSource
 
         private IConnection rabbitConnection;
         private IModel consumerChannel;
-        private QueueingBasicConsumer queueConsumer;
 
         private RabbitMQConnectionManager.RabbitMQConnectionManager rabbitMqConnectionManager;
 
@@ -71,7 +70,7 @@ namespace RabbitMQSource
 
             IDTSCustomProperty100 timeoutProperty = ComponentMetaData.CustomPropertyCollection.New();
             timeoutProperty.Name = "Timeout";
-            timeoutProperty.Description = "Max. time in seconds to wait for a message.";
+            timeoutProperty.Description = "Max. time in seconds to pull messages.";
             timeoutProperty.ExpressionType = DTSCustomPropertyExpressionType.CPET_NOTIFY;
             timeoutProperty.Value = 1;
 
@@ -225,8 +224,6 @@ namespace RabbitMQSource
                 consumerChannel = rabbitConnection.CreateModel();
                 if (declareQueue)
                     consumerChannel.QueueDeclare(queueName, true, false, false, null);
-                queueConsumer = new QueueingBasicConsumer(consumerChannel);
-                consumerTag = consumerChannel.BasicConsume(queueName, true, queueConsumer);
             }
             catch (Exception)
             {
@@ -237,25 +234,25 @@ namespace RabbitMQSource
 
         public override void PrimeOutput(int outputs, int[] outputIDs, PipelineBuffer[] buffers)
         {
+            DateTime startTime = DateTime.UtcNow;
             int numRows = 0;
             IDTSOutput100 output = ComponentMetaData.OutputCollection[0];
             PipelineBuffer buffer = buffers[0];
 
-            BasicDeliverEventArgs message;
-            bool success;
+            BasicGetResult result;
 
-            while (queueConsumer.IsRunning && numRows < batchSize)
+            while (numRows < batchSize && (DateTime.UtcNow - startTime).TotalSeconds < timeout)
             {
                 try
                 {
-                    success = queueConsumer.Queue.Dequeue(timeout * 1000, out message);
+                    result = consumerChannel.BasicGet(queueName, true);
                 }
                 catch (Exception)
                 {
                     break;
                 }
 
-                if (success)
+                if (result != null)
                 {
                     numRows++;
                     buffer.AddRow();
@@ -264,21 +261,21 @@ namespace RabbitMQSource
                     {
                         /* Handles body, routing key and timestamp: */
                         if (string.Equals(output.OutputColumnCollection[i].Name, defaultBodyColumnName))
-                            buffer[outputToBufferMap[i]] = message.Body;
+                            buffer[outputToBufferMap[i]] = result.Body;
                         else if (string.Equals(output.OutputColumnCollection[i].Name, defaultRoutingKeyColumnName))
-                            buffer[outputToBufferMap[i]] = message.RoutingKey;
+                            buffer[outputToBufferMap[i]] = result.RoutingKey;
                         else if (string.Equals(output.OutputColumnCollection[i].Name, defaultTimestampColumnName))
-                            buffer[outputToBufferMap[i]] = UnixTimeStampToDateTime(message.BasicProperties.Timestamp.UnixTime);
+                            buffer[outputToBufferMap[i]] = UnixTimeStampToDateTime(result.BasicProperties.Timestamp.UnixTime);
                         /* For all other columns see if a header matched the name: */
-                        else if (message.BasicProperties.Headers.ContainsKey(output.OutputColumnCollection[i].Name.ToLower()))
+                        else if (result.BasicProperties.Headers.ContainsKey(output.OutputColumnCollection[i].Name.ToLower()))
                         {
                             var column = output.OutputColumnCollection[i];
-                            var data = message.BasicProperties.Headers[output.OutputColumnCollection[i].Name.ToLower()];
+                            var data = result.BasicProperties.Headers[output.OutputColumnCollection[i].Name.ToLower()];
 
                             if (column.DataType == DataType.DT_WSTR && data is byte[])
                                 buffer[outputToBufferMap[i]] = Encoding.UTF8.GetString((byte[])data);
                             else
-                                buffer[outputToBufferMap[i]] = message.BasicProperties.Headers[output.OutputColumnCollection[i].Name.ToLower()];
+                                buffer[outputToBufferMap[i]] = result.BasicProperties.Headers[output.OutputColumnCollection[i].Name.ToLower()];
                         }
                         /* Otherwise, simply set output null */
                         else
@@ -290,7 +287,7 @@ namespace RabbitMQSource
                 }
                 else
                 {
-                    break;
+                    System.Threading.Tasks.Task.Delay(500).Wait();
                 }
             }
 
@@ -301,10 +298,6 @@ namespace RabbitMQSource
         {
             if (consumerChannel.IsOpen)
             {
-                if (queueConsumer.IsRunning)
-                {
-                    consumerChannel.BasicCancel(consumerTag);
-                }
                 consumerChannel.Close();
             }
             base.Cleanup();
