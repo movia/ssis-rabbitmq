@@ -10,6 +10,7 @@ using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
 using RabbitMQSource.Enums;
+using System.Threading;
 
 namespace RabbitMQSource
 {
@@ -22,6 +23,8 @@ namespace RabbitMQSource
         UITypeName = "RabbitMQSource.RabbitMQSourceUI, RabbitMQSource, Version=13.0.1.0, Culture=neutral, PublicKeyToken=ac1c316408dd3955")]
     public class RabbitMQSource : PipelineComponent
     {
+        private const string logEntryName = "RabbitMQ Source Component Log Entry";
+
         private const string defaultBodyColumnName = "Body";
         private const string defaultRoutingKeyColumnName = "RoutingKey";
         private const string defaultTimestampColumnName = "Timestamp";
@@ -37,6 +40,11 @@ namespace RabbitMQSource
         private int batchSize;
         private string consumerTag;
 
+        private DateTime startTime;
+        private int numRows;
+        private ManualResetEventSlim handle_consume;
+        private ManualResetEventSlim handle_cancel;
+
         public int[] outputToBufferMap;
 
         public static DateTime UnixTimeStampToDateTime(double unixTimeStamp)
@@ -45,6 +53,13 @@ namespace RabbitMQSource
             System.DateTime dtDateTime = new DateTime(1970, 1, 1, 0, 0, 0, 0, System.DateTimeKind.Utc);
             dtDateTime = dtDateTime.AddSeconds(unixTimeStamp);
             return dtDateTime;
+        }
+
+        public override void RegisterLogEntries()
+        {
+            this.LogEntryInfos.Add(logEntryName,
+              string.Empty,
+              Microsoft.SqlServer.Dts.Runtime.Wrapper.DTSLogEntryFrequency.DTSLEF_OCCASIONAL);
         }
 
         public override void ProvideComponentProperties()
@@ -141,7 +156,6 @@ namespace RabbitMQSource
             var output = ComponentMetaData.OutputCollection.FindObjectByID(outputId);
 
             var column = base.InsertOutputColumnAt(outputId, outputColumnIndex, name, description);
-            //CreateExternalMetaDataColumn(output, column);        
 
             return column;
         }
@@ -205,6 +219,11 @@ namespace RabbitMQSource
         {
             var output = ComponentMetaData.OutputCollection[0];
 
+            startTime = DateTime.UtcNow;
+            numRows = 0;
+            handle_consume = new ManualResetEventSlim();
+            handle_cancel = new ManualResetEventSlim();
+
             /* Parse properties */
             declareQueue = (TrueFalseProperty)ComponentMetaData.CustomPropertyCollection["DeclareQueue"].Value == TrueFalseProperty.True;
             
@@ -234,62 +253,69 @@ namespace RabbitMQSource
 
         public override void PrimeOutput(int outputs, int[] outputIDs, PipelineBuffer[] buffers)
         {
-            DateTime startTime = DateTime.UtcNow;
-            int numRows = 0;
             IDTSOutput100 output = ComponentMetaData.OutputCollection[0];
             PipelineBuffer buffer = buffers[0];
 
-            BasicGetResult result;
+            var consumer = new EventingBasicConsumer(consumerChannel);
 
-            while (numRows < batchSize && (DateTime.UtcNow - startTime).TotalSeconds < timeout)
+            consumer.Received += (ch, ea) =>
+             {
+                 numRows++;
+
+                 buffer.AddRow();
+
+                 for (int i = 0; i < output.OutputColumnCollection.Count; i++)
+                 {
+                     /* Handles body, routing key and timestamp: */
+                     if (string.Equals(output.OutputColumnCollection[i].Name, defaultBodyColumnName))
+                         buffer[outputToBufferMap[i]] = ea.Body;
+                     else if (string.Equals(output.OutputColumnCollection[i].Name, defaultRoutingKeyColumnName))
+                         buffer[outputToBufferMap[i]] = ea.RoutingKey;
+                     else if (string.Equals(output.OutputColumnCollection[i].Name, defaultTimestampColumnName))
+                         buffer[outputToBufferMap[i]] = UnixTimeStampToDateTime(ea.BasicProperties.Timestamp.UnixTime);
+                     /* For all other columns see if a header matched the name: */
+                     else if (ea.BasicProperties.Headers.ContainsKey(output.OutputColumnCollection[i].Name.ToLower()))
+                     {
+                         var column = output.OutputColumnCollection[i];
+                         var data = ea.BasicProperties.Headers[output.OutputColumnCollection[i].Name.ToLower()];
+
+                         if (column.DataType == DataType.DT_WSTR && data is byte[])
+                             buffer[outputToBufferMap[i]] = Encoding.UTF8.GetString((byte[])data);
+                         else
+                             buffer[outputToBufferMap[i]] = ea.BasicProperties.Headers[output.OutputColumnCollection[i].Name.ToLower()];
+                     }
+                     /* Otherwise, simply set output null */
+                     else
+                     {
+                         buffer.SetNull(outputToBufferMap[i]);
+                     }
+                 }
+
+                 if (numRows >= batchSize)
+                 {
+                     DateTime now = DateTime.Now;
+                     byte[] additionalData = null;
+                     ComponentMetaData.PostLogMessage(logEntryName,
+                       ComponentMetaData.Name,
+                       $"Reatched {numRows} messages, stopping consumer.",
+                       now, now, 0, ref additionalData);
+
+                     handle_consume.Set();
+                 }
+             };
+            consumer.Unregistered += (ch, ea) =>
             {
-                try
-                {
-                    result = consumerChannel.BasicGet(queueName, true);
-                }
-                catch (Exception)
-                {
-                    break;
-                }
+                handle_cancel.Set();
+            };
 
-                if (result != null)
-                {
-                    numRows++;
-                    buffer.AddRow();
+            consumerTag = consumerChannel.BasicConsume(queueName, true, consumer);
 
-                    for (int i = 0; i < output.OutputColumnCollection.Count; i++)
-                    {
-                        /* Handles body, routing key and timestamp: */
-                        if (string.Equals(output.OutputColumnCollection[i].Name, defaultBodyColumnName))
-                            buffer[outputToBufferMap[i]] = result.Body;
-                        else if (string.Equals(output.OutputColumnCollection[i].Name, defaultRoutingKeyColumnName))
-                            buffer[outputToBufferMap[i]] = result.RoutingKey;
-                        else if (string.Equals(output.OutputColumnCollection[i].Name, defaultTimestampColumnName))
-                            buffer[outputToBufferMap[i]] = UnixTimeStampToDateTime(result.BasicProperties.Timestamp.UnixTime);
-                        /* For all other columns see if a header matched the name: */
-                        else if (result.BasicProperties.Headers.ContainsKey(output.OutputColumnCollection[i].Name.ToLower()))
-                        {
-                            var column = output.OutputColumnCollection[i];
-                            var data = result.BasicProperties.Headers[output.OutputColumnCollection[i].Name.ToLower()];
+            /* With for timeout, or until signal et set for reaching batchSize. */
+            handle_consume.Wait(timeout * 1000);
 
-                            if (column.DataType == DataType.DT_WSTR && data is byte[])
-                                buffer[outputToBufferMap[i]] = Encoding.UTF8.GetString((byte[])data);
-                            else
-                                buffer[outputToBufferMap[i]] = result.BasicProperties.Headers[output.OutputColumnCollection[i].Name.ToLower()];
-                        }
-                        /* Otherwise, simply set output null */
-                        else
-                        {
-                            buffer.SetNull(outputToBufferMap[i]);
-                        }
-                    }
-                    
-                }
-                else
-                {
-                    System.Threading.Tasks.Task.Delay(500).Wait();
-                }
-            }
+            consumerChannel.BasicCancel(consumerTag);
+
+            handle_cancel.Wait();
 
             buffer.SetEndOfRowset();
         }
