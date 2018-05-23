@@ -40,7 +40,6 @@ namespace RabbitMQSource
         private int batchSize;
         private string consumerTag;
 
-        private DateTime startTime;
         private int numRows;
         private ManualResetEventSlim handle_consume;
         private ManualResetEventSlim handle_cancel;
@@ -219,7 +218,6 @@ namespace RabbitMQSource
         {
             var output = ComponentMetaData.OutputCollection[0];
 
-            startTime = DateTime.UtcNow;
             numRows = 0;
             handle_consume = new ManualResetEventSlim();
             handle_cancel = new ManualResetEventSlim();
@@ -308,7 +306,8 @@ namespace RabbitMQSource
                 handle_cancel.Set();
             };
 
-            consumerTag = consumerChannel.BasicConsume(queueName, true, consumer);
+            consumerTag = $"ssis-rabbitmq-{Environment.MachineName}-{DateTime.UtcNow.ToString("o")}";
+            consumerTag = consumerChannel.BasicConsume(queueName, true, consumerTag, consumer);
 
             /* With for timeout, or until signal et set for reaching batchSize. */
             handle_consume.Wait(timeout * 1000);
